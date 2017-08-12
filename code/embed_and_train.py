@@ -15,47 +15,72 @@ import time
 import datetime
 import data_helpers_embed
 from tensorflow.contrib import learn
+from sklearn.metrics import precision_score, recall_score
 
 # Parameters
 # ==================================================
 
-# Which model to use
-tf.flags.DEFINE_string("model", "baseline_sub_mult_nn", "Specify which model to use")
+# Which model, which embedding method and which data size to use
+tf.flags.DEFINE_string("model", "baseline_bilinear_embed", "Specify which model to use") #baseline_bilinear_embed cnn_att_sub_mult, cnn_att_comp_agr baseline_concat_nn_embed , baseline_sub_mult_nn_embed, cnn_attention
+tf.flags.DEFINE_string("embedding_method", "CBOW", "embedding_method")
+tf.flags.DEFINE_string("dataset_size", "short_balanced", "short_balanced, medium_balanced, or full_balanced")
 
 # Data loading params
 tf.flags.DEFINE_float("dev_sample_percentage", .1, "Percentage of the training data to use for validation")
-tf.flags.DEFINE_string("labels", "../../data/short_fold0_600K_labels.csv", "labels")
-tf.flags.DEFINE_string("query_CBOW", "../../data/short_fold0_600K_query_CBOW.csv", "query_CBOW")
-tf.flags.DEFINE_string("paragraph_CBOW", "../../data/short_fold0_600K_paragraph_CBOW.csv", "paragraph_CBOW")
-tf.flags.DEFINE_string("query_CNN", "../../data/short_fold0_600K_query_CNN.csv", "query_CNN")
-tf.flags.DEFINE_string("paragraph_CNN", "../../data/short_fold0_600K_paragraph_CNN.csv", "paragraph_CNN")
-tf.flags.DEFINE_string("query_RNN", "../../data/short_fold0_600K_query_RNN.csv", "query_RNN")
-tf.flags.DEFINE_string("paragraph_RNN", "../../data/short_fold0_600K_paragraph_RNN.csv", "paragraph_RNN")
-tf.flags.DEFINE_string("query_text", "../../data/short_fold0_600K_query_text.csv", "query_text")
-tf.flags.DEFINE_string("paragraph_text", "../../data/short_fold0_600K_paragraph_text.csv", "paragraph_text")
-tf.flags.DEFINE_string("embedding_method", "CBOW", "embedding_method")
+tf.flags.DEFINE_string("emb_path", "../../glove/glove.6B.50d.txt","Path to word embeddings")
+tf.flags.DEFINE_string("short_balanced_labels", "../../data/clean_balanced_short_fold0_600K_labels.csv", "labels")
+tf.flags.DEFINE_string("short_balanced_query_text", "../../data/clean_balanced_short_fold0_600K_query_text.csv", "query_text")
+tf.flags.DEFINE_string("short_balanced_paragraph_text", "../../data/clean_balanced_short_fold0_600K_paragraph_text.csv", "paragraph_text")
+tf.flags.DEFINE_string("medium_balanced_labels", "../../data/clean_balanced_medium_fold0_600K_labels.csv", "labels")
+tf.flags.DEFINE_string("medium_balanced_query_text", "../../data/clean_balanced_medium_fold0_600K_query_text.csv", "query_text")
+tf.flags.DEFINE_string("medium_balanced_paragraph_text", "../../data/clean_balanced_medium_fold0_600K_paragraph_text.csv", "paragraph_text")
+tf.flags.DEFINE_string("full_balanced_labels", "../../data/300K_clean_balanced_full_fold0_600K_labels.csv", "labels")
+tf.flags.DEFINE_string("full_balanced_query_text", "../../data/300K_clean_balanced_full_fold0_600K_query_text.csv", "query_text")
+tf.flags.DEFINE_string("full_balanced_paragraph_text", "../../data/300K_clean_balanced_full_fold0_600K_paragraph_text.csv", "paragraph_text")
+tf.flags.DEFINE_string("data_cleaning_flag", True, "data_cleaning_flag")
 
 # Model Hyperparameters
-tf.flags.DEFINE_integer("embedding_dim", 300, "Dimensionality of character embedding (default: 128)")
+
 tf.flags.DEFINE_string("filter_sizes", "3,4,5", "Comma-separated filter sizes (default: '3,4,5')")
-tf.flags.DEFINE_integer("num_filters", 128, "Number of filters per filter size (default: 128)")
-tf.flags.DEFINE_float("dropout_keep_prob", 0.5, "Dropout keep probability (default: 0.5)")
+tf.flags.DEFINE_integer("num_filters", 150, "Number of filters per filter size (default: 128)")
+tf.flags.DEFINE_float("dropout_keep_prob", 1.0, "Dropout keep probability (default: 0.5)")
 tf.flags.DEFINE_float("l2_reg_lambda", 0.0, "L2 regularization lambda (default: 0.0)")
-tf.flags.DEFINE_float("learning_rate", 1e-6, "Learning rate (default: 1e-3)")
+tf.flags.DEFINE_float("learning_rate", 1e-3, "Learning rate (default: 1e-3)")
 
 # Training parameters
 tf.flags.DEFINE_integer("batch_size", 50, "Batch Size (default: 64)")
-tf.flags.DEFINE_integer("num_epochs", 100, "Number of training epochs (default: 200)")
+tf.flags.DEFINE_integer("num_epochs", 5000, "Number of training epochs (default: 200)")
 tf.flags.DEFINE_integer("evaluate_every", 100, "Evaluate model on dev set after this many steps (default: 100)")
-tf.flags.DEFINE_integer("checkpoint_every", 100, "Save model after this many steps (default: 100)")
+tf.flags.DEFINE_integer("checkpoint_every", 1000, "Save model after this many steps (default: 100)")
 tf.flags.DEFINE_integer("num_checkpoints", 5, "Number of checkpoints to store (default: 5)")
 
 # Misc Parameters
 tf.flags.DEFINE_boolean("allow_soft_placement", True, "Allow device soft device placement")
 tf.flags.DEFINE_boolean("log_device_placement", False, "Log placement of ops on devices")
+tf.flags.DEFINE_integer("vocab_freq", 3, "Min word frequency to appear in vocab. Default : 5")
+tf.flags.DEFINE_integer("max_doc_length", 50, "Max document length. Truncates documents longer than x words. Default : 1000")
+tf.flags.DEFINE_integer("max_question_length", 5, "Max document length. Truncates documents longer than x words. Default : 1000")
+tf.flags.DEFINE_boolean("separate_question_length", False, "separate_question_length")
 
 FLAGS = tf.flags.FLAGS
 FLAGS._parse_flags()
+
+timestamp_val = str(time.time())
+
+#create output files
+dev_opt_filename = "dev_"+FLAGS.model + timestamp_val + ".csv"
+train_opt_filename =  "train_"+FLAGS.model + timestamp_val + ".csv"
+dev_opt_file = "../../runs/"+dev_opt_filename
+train_opt_file = "../../runs/"+train_opt_filename
+
+with open(dev_opt_file,"a") as dev_opt:
+        dev_opt.write("step,dev_acc,dev_precision,dev_recall\n")
+
+
+with open(train_opt_file,"a") as train_opt:
+        train_opt.write("step,train_acc,train_precision,train_recall\n")
+
+
 print("\nParameters:")
 for attr, value in sorted(FLAGS.__flags.items()):
     print("{}={}".format(attr.upper(), value))
@@ -69,6 +94,20 @@ elif FLAGS.model == "baseline_sub_mult_nn":
     from baseline_sub_mult_nn import Model
 elif FLAGS.model == "baseline_concat_nn":
     from baseline_concat_nn import Model
+elif FLAGS.model == "baseline_bilinear_embed":
+    from baseline_bilinear_embed import Model
+elif FLAGS.model == "baseline_sub_mult_nn_embed":
+    from baseline_sub_mult_nn_embed import Model
+elif FLAGS.model == "baseline_concat_nn_embed":
+    from baseline_concat_nn_embed import Model
+elif FLAGS.model == "simple_attention_concat_nn_embed":
+    from simple_attention_concat_nn_embed import Model
+elif FLAGS.model == "cnn_att_sub_mult":
+    from cnn_attention_sub_mult_nn import Model
+elif FLAGS.model == "cnn_att_comp_agr":
+    from cnn_att_comp_agr import Model
+elif FLAGS.model == "cnn_attention":
+    from cnn_attention import Model
 else:
     print("wrong model defined")
 
@@ -77,26 +116,33 @@ else:
 
 # Load data
 print("Loading data...")
-if FLAGS.model in ["baseline_bilinear", "baseline_sub_mult_nn", "baseline_concat_nn"]:
-    q, p, y = data_helpers_embed.load_data_and_labels(FLAGS)
-    #q, p, y = data_helpers_embed.load_data_and_labels(FLAGS.labels, FLAGS.query_CBOW, FLAGS.paragraph_CBOW, FLAGS.embedding_method)
-else:
-    q, p, y = data_helpers_embed.load_data_and_labels(FLAGS.labels, FLAGS.query_text, FLAGS.paragraph_text, FLAGS.embedding_method)
+q_text, p_text, y = data_helpers_embed.load_data_and_labels(FLAGS)
 
 # Build vocabulary
-#max_document_length = max([len(x.split(" ")) for x in x_text])
-#print("vocab processing Starts")
-#vocab_processor = learn.preprocessing.VocabularyProcessor()#max_document_length
-#vocab_processor.fit(p_text)
-#p = np.array(list(vocab_processor.transform(p_text)))
-#q = np.array(list(vocab_processor.transform(q_text)))
-#print("vocab processing done")
+print("Finding maximum length in train data...")
+max_document_length = max([len(p.split(" ")) for p in p_text])
+print("Maximum document length is %d words" %max_document_length)
+print("Building vocabulary...")
+vocab_processor = learn.preprocessing.VocabularyProcessor(FLAGS.max_doc_length, min_frequency=FLAGS.vocab_freq)
+print("Processing text data...")
+vocab_processor.fit(np.append(p_text,q_text))
+q = np.array(list(vocab_processor.transform(q_text)))
+p = np.array(list(vocab_processor.transform(p_text)))
 
-# Randomly shuffle data
-#np.random.seed(10)
-#shuffle_indices = np.random.permutation(np.arange(len(y)))
-#x_shuffled = x[shuffle_indices]
-#y_shuffled = y[shuffle_indices]
+#cutting the question at separate length
+if FLAGS.separate_question_length:
+    print("Cutting queries at separate length...")
+    q = [x[:FLAGS.max_question_length] for x in q]
+    print("Queries cut operation done !")
+
+vocab_dict = vocab_processor.vocabulary_._mapping
+sorted_vocab = sorted(vocab_dict.items(), key = lambda x : x[1])
+vocabulary = list(list(zip(*sorted_vocab))[0])
+
+# Load embeddings
+embeddings = data_helpers_embed.load_embeddings(FLAGS.emb_path, vocab_processor)
+embeddings[0]=  np.zeros((1,embeddings.shape[1]))
+
 
 # Randomly shuffle data
 print("Randomly shuffling the data.../n")
@@ -106,15 +152,14 @@ q_shuffled, p_shuffled, y_shuffled = zip(*c)
 q_shuffled, p_shuffled, y_shuffled = np.array(q_shuffled), np.array(p_shuffled), np.array(y_shuffled)
 print("data shuffled !/n")
 
-print ("q_shuffled.shape :",np.shape(q_shuffled))
-print ("p_shuffled.shape :",np.shape(p_shuffled))
-print ("y_shuffled.shape :",np.shape(y_shuffled))
-
 # Split train/test set
 # TODO: This is very crude, should use cross-validation
 print("Splitting into train and dev \n")
 
-dev_sample_index = -1 * int(FLAGS.dev_sample_percentage * float(len(y)))
+if FLAGS.dataset_size == "full_balanced":
+    dev_sample_index = -5000
+else:
+    dev_sample_index = -1 * int(FLAGS.dev_sample_percentage * float(len(y)))
 print("Dev Samples : ",dev_sample_index )
 q_train, q_dev = q_shuffled[:dev_sample_index], q_shuffled[dev_sample_index:]
 p_train, p_dev = p_shuffled[:dev_sample_index], p_shuffled[dev_sample_index:]
@@ -141,41 +186,60 @@ with tf.Graph().as_default():
     with sess.as_default():
 
         model = Model(
-            #sequence_length=q_train.shape[1],
             num_classes=y_train.shape[1],
-            #vocab_size=len(vocab_processor.vocabulary_),
-            embedding_size= FLAGS.embedding_dim,  #q_train.shape[1]
+            vocab_size=len(vocab_processor.vocabulary_),
+            embedding_size = embeddings.shape[1],
+            max_length = FLAGS.max_doc_length,
+            vocab_proc = vocab_processor,
             filter_sizes=list(map(int, FLAGS.filter_sizes.split(","))),
             num_filters=FLAGS.num_filters,
             l2_reg_lambda=FLAGS.l2_reg_lambda)
 
-        # Output directory for models and summaries
-        timestamp = str(int(time.time()))
-        out_dir = os.path.abspath(os.path.join("../../runs", timestamp))  #os.path.curdir,"runs", timestamp
-        print("Writing to {}\n".format(out_dir))
 
         print("Defined Model\n")
         # Define Training procedure
         global_step = tf.Variable(0, name="global_step", trainable=False)
         optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
         grads_and_vars = optimizer.compute_gradients(model.loss) # ,tf.trainable_variables()
-        train_op = optimizer.apply_gradients(grads_and_vars, global_step=global_step)
+        def ClipIfNotNone(grad):
+            if grad is None:
+                print("NAN----------------------------------------------------")
+                return grad
+            return tf.clip_by_value(grad, -5, 5)
+        clipped_gradients = [(ClipIfNotNone(grad), var) for grad, var in grads_and_vars]
+
+        print("grads_and_vars")
+
+        # grads_and_vars is a list of tuples (gradient, variable).  Do whatever you
+        # need to the 'gradient' part, for example cap them, etc.
+        #capped_grads_and_vars = [(tf.clip_by_value(gv[0], -5., 5.), gv[1]) for gv in grads_and_vars]
+
+        # Ask the optimizer to apply the capped gradients.
+        train_op = optimizer.apply_gradients(clipped_gradients, global_step=global_step)
 
         # Keep track of gradient values and sparsity (optional)
         grad_summaries = []
-        #grad_summaries_merged = tf.constant(1)                     #updated
+        for g, v in grads_and_vars:
+            if g is not None:
+                grad_hist_summary = tf.summary.histogram("{}/grad/hist".format(v.name), g)
+                sparsity_summary = tf.summary.scalar("{}/grad/sparsity".format(v.name), tf.nn.zero_fraction(g))
+                grad_summaries.append(grad_hist_summary)
+                grad_summaries.append(sparsity_summary)
+        grad_summaries_merged = tf.summary.merge(grad_summaries)
+
 
         # Output directory for models and summaries
-        #timestamp = str(int(time.time()))
-        #out_dir = os.path.abspath(os.path.join(os.path.curdir, "runs", timestamp))
-        #print("Writing to {}\n".format(out_dir))
+
+        out_dir = os.path.abspath(os.path.join(os.path.curdir, "../../runs", timestamp_val))
+        print("Writing to {}\n".format(out_dir))
+
 
         # Summaries for loss and accuracy
         loss_summary = tf.summary.scalar("loss", model.loss)
         acc_summary = tf.summary.scalar("accuracy", model.accuracy)
 
         # Train Summaries
-        #train_summary_op = tf.summary.merge([loss_summary, acc_summary, grad_summaries_merged])
+
         train_summary_dir = os.path.join(out_dir, "summaries", "train")
         train_summary_writer = tf.summary.FileWriter(train_summary_dir, sess.graph)
 
@@ -192,11 +256,12 @@ with tf.Graph().as_default():
         saver = tf.train.Saver(tf.global_variables(), max_to_keep=FLAGS.num_checkpoints)
 
         # Write vocabulary
-        #vocab_processor.save(os.path.join(out_dir, "vocab"))
+        vocab_processor.save(os.path.join(out_dir, "vocab"))
 
         # Initialize all variables
         sess.run(tf.global_variables_initializer())
         print ("global variable initialized")
+
         def train_step(q_batch, p_batch, y_batch):
             """
             A single training step
@@ -205,15 +270,23 @@ with tf.Graph().as_default():
               model.input_q: q_batch,
               model.input_p: p_batch,
               model.input_y: y_batch,
+              model.W_emb: embeddings,
               model.dropout_keep_prob: FLAGS.dropout_keep_prob
             }
-
-            _, step, loss, accuracy = sess.run(
-                [train_op, global_step, model.loss, model.accuracy],
+            _,step, loss, accuracy, y_true, y_pred, scores= sess.run(
+                [train_op, global_step, model.loss, model.accuracy, model.y_true, model.predictions, model.scores],
                 feed_dict)
+
+            time_str = datetime.datetime.now().isoformat()
+            precision = precision_score(y_true, y_pred)
+            recall = recall_score(y_true, y_pred)
+            opt_line = str(step) + "," + str(accuracy) + "," + str(precision) +","+str(recall)+","+ str(loss)+"\n"
+            with open(train_opt_file,"a") as train_opt:
+                    train_opt.write(opt_line)
+
             time_str = datetime.datetime.now().isoformat()
             print("{}: step {}, loss {:g}, acc {:g}".format(time_str, step, loss, accuracy))
-            #train_summary_writer.add_summary(summaries, step) #train_summary_op, # summaries,
+
 
         def dev_step(q_batch, p_batch, y_dev, writer=None):
             """
@@ -223,13 +296,20 @@ with tf.Graph().as_default():
               model.input_q: q_batch,
               model.input_p: p_batch,
               model.input_y: y_dev,
+              model.W_emb: embeddings,
               model.dropout_keep_prob: 1.0
             }
-            step, summaries, loss, accuracy = sess.run(
-                [global_step, dev_summary_op, model.loss, model.accuracy],
+            step, summaries, loss, accuracy, y_true, y_pred, scores= sess.run(
+                [global_step, dev_summary_op, model.loss, model.accuracy, model.y_true, model.predictions, model.scores],
                 feed_dict)
+
             time_str = datetime.datetime.now().isoformat()
-            print("{}: step {}, loss {:g}, acc {:g}".format(time_str, step, loss, accuracy))
+            precision = precision_score(y_true, y_pred)
+            recall = recall_score(y_true, y_pred)
+            opt_line = str(step) + "," + str(accuracy) + "," + str(precision) +","+str(recall)+","+ str(loss)+"\n"
+            with open(dev_opt_file,"a") as dev_opt:
+                    dev_opt.write(opt_line)
+            print("{}: step {}, loss {:g}, acc {:g}, precision {:g}, recall {:g}".format(time_str, step, loss, accuracy, precision, recall))
             if writer:
                 writer.add_summary(summaries, step)
 
@@ -241,14 +321,7 @@ with tf.Graph().as_default():
         # Training loop. For each batch...
         for batch in batches:
             q_batch, p_batch, y_batch = zip(*batch)
-            #print ("q_batch.shape[1] :",q_batch.shape[1])
-            q_batch, p_batch = data_helpers_embed.embed_batch(q_batch, p_batch)
-            print("train_step started for batch")
-            print ("q_batch.shape :",np.shape(q_batch))
-            print ("p_batch.shape :",np.shape(p_batch))
-            print ("y_batch.shape :",np.shape(y_batch))
             train_step(q_batch, p_batch, y_batch)
-            print("train_step done for batch")
             current_step = tf.train.global_step(sess, global_step)
             if current_step % FLAGS.evaluate_every == 0:
                 print("\nEvaluation:")
